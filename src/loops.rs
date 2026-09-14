@@ -41,6 +41,35 @@ fn col_l2(chroma: &[f32], n_frames: usize, f: usize) -> f32 {
 }
 
 #[inline]
+fn mel_dot(mel: &[f32], n_frames: usize, n_mels: usize, f1: usize, f2: usize) -> f32 {
+    let mut dot = 0.0f32;
+    let mut na = 0.0f32;
+    let mut nb = 0.0f32;
+    for m in 0..n_mels {
+        let base = m * n_frames;
+        let x = mel[base + f1];
+        let y = mel[base + f2];
+        dot += x * y;
+        na += x * x;
+        nb += y * y;
+    }
+    dot / (na * nb).sqrt().max(1e-10)
+}
+
+/// Combined pitch (chroma) + timbre (log-mel) frame similarity.
+#[inline]
+fn frame_sim(
+    chroma: &[f32],
+    mel: &[f32],
+    n_frames: usize,
+    n_mels: usize,
+    f1: usize,
+    f2: usize,
+) -> f32 {
+    0.5 * col_dot(chroma, n_frames, f1, f2) + 0.5 * mel_dot(mel, n_frames, n_mels, f1, f2)
+}
+
+#[inline]
 fn col_max(power_db: &[f32], n_frames: usize, n_bins: usize, f: usize) -> f32 {
     let mut m = f32::MIN;
     for k in 0..n_bins {
@@ -83,7 +112,9 @@ fn percentile(sorted: &[f32], p: f32) -> f32 {
 
 fn subseq_sim(
     chroma: &[f32],
+    mel: &[f32],
     n_frames: usize,
+    n_mels: usize,
     b1_start: usize,
     b2_start: usize,
     test_end_offset: i64,
@@ -112,7 +143,7 @@ fn subseq_sim(
         .map(|i| {
             let f1 = (b1s + i as i64) as usize;
             let f2 = (b2s + i as i64) as usize;
-            col_dot(chroma, n_frames, f1, f2)
+            frame_sim(chroma, mel, n_frames, n_mels, f1, f2)
         })
         .collect();
 
@@ -132,15 +163,35 @@ fn subseq_sim(
 
 fn loop_score(
     chroma: &[f32],
+    mel: &[f32],
     n_frames: usize,
+    n_mels: usize,
     b1: usize,
     b2: usize,
     test_duration: usize,
     weights: &[f32],
 ) -> f32 {
-    let lookahead = subseq_sim(chroma, n_frames, b1, b2, test_duration as i64, weights);
+    let lookahead = subseq_sim(
+        chroma,
+        mel,
+        n_frames,
+        n_mels,
+        b1,
+        b2,
+        test_duration as i64,
+        weights,
+    );
     let rev: Vec<f32> = weights.iter().rev().copied().collect();
-    let lookbehind = subseq_sim(chroma, n_frames, b1, b2, -(test_duration as i64), &rev);
+    let lookbehind = subseq_sim(
+        chroma,
+        mel,
+        n_frames,
+        n_mels,
+        b1,
+        b2,
+        -(test_duration as i64),
+        &rev,
+    );
     lookahead.max(lookbehind)
 }
 
@@ -272,6 +323,8 @@ fn prioritize_duration(pairs: &mut Vec<LoopPair>) {
 #[allow(clippy::too_many_arguments)]
 pub fn find_best_loop_points(
     chroma: &[f32],
+    mel: &[f32],
+    n_mels: usize,
     power_db: &[f32],
     n_bins: usize,
     n_frames: usize,
@@ -323,7 +376,9 @@ pub fn find_best_loop_points(
     for p in pairs.iter_mut() {
         p.score = loop_score(
             chroma,
+            mel,
             n_frames,
+            n_mels,
             p.start_frame,
             p.end_frame,
             test_offset,

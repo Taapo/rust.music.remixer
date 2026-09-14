@@ -4,6 +4,7 @@ use std::path::Path;
 
 pub const N_FFT: usize = 2048;
 pub const HOP: usize = 512;
+pub const N_MELS: usize = 24;
 
 /// Trim leading/trailing silence. Returns (start_sample, end_sample) in `mono`.
 /// Mirrors `librosa.effects.trim(top_db=40)`.
@@ -35,6 +36,8 @@ pub fn trim_silence(mono: &[f32], top_db: f32) -> (usize, usize) {
 pub struct Features {
     /// 12 * n_frames, pitch-class major
     pub chroma: Vec<f32>,
+    /// n_mels * n_frames, log-mel timbre (frame major is n_mels stride)
+    pub mel: Vec<f32>,
     /// n_bins * n_frames, bin major, perceptually weighted dB
     pub power_db: Vec<f32>,
     pub n_bins: usize,
@@ -97,7 +100,42 @@ fn build_chroma_filter(sr: u32, n_fft: usize) -> Vec<f32> {
     filter
 }
 
-/// Compute STFT-derived chroma and perceptual power (dB) features.
+fn hz_to_mel(f: f32) -> f32 {
+    2595.0 * (1.0 + f / 700.0).log10()
+}
+
+fn mel_to_hz(m: f32) -> f32 {
+    700.0 * (10f32.powf(m / 2595.0) - 1.0)
+}
+
+fn build_mel_filter(sr: u32, n_fft: usize, n_mels: usize) -> Vec<f32> {
+    let n_bins = n_fft / 2 + 1;
+    let fmin = 20.0f32;
+    let fmax = 8000.0f32.min(sr as f32 / 2.0);
+    let mel_min = hz_to_mel(fmin);
+    let mel_max = hz_to_mel(fmax);
+    let hz: Vec<f32> = (0..n_mels + 2)
+        .map(|i| mel_to_hz(mel_min + (mel_max - mel_min) * i as f32 / (n_mels + 1) as f32))
+        .collect();
+    let mut filter = vec![0.0f32; n_mels * n_bins];
+    for m in 0..n_mels {
+        let (lo, c, hi) = (hz[m], hz[m + 1], hz[m + 2]);
+        for k in 0..n_bins {
+            let f = k as f32 * sr as f32 / n_fft as f32;
+            let w = if f >= lo && f <= c && c > lo {
+                (f - lo) / (c - lo)
+            } else if f > c && f <= hi && hi > c {
+                (hi - f) / (hi - c)
+            } else {
+                0.0
+            };
+            filter[m * n_bins + k] = w;
+        }
+    }
+    filter
+}
+
+/// Compute STFT-derived chroma, log-mel timbre and perceptual power (dB).
 pub fn compute_features(mono: &[f32], sr: u32, n_fft: usize, hop: usize) -> Features {
     let n_bins = n_fft / 2 + 1;
     let n_frames = 1 + mono.len() / hop;
@@ -108,6 +146,7 @@ pub fn compute_features(mono: &[f32], sr: u32, n_fft: usize, hop: usize) -> Feat
     let fft = planner.plan_fft_forward(n_fft);
 
     let chroma_filter = build_chroma_filter(sr, n_fft);
+    let mel_filter = build_mel_filter(sr, n_fft, N_MELS);
     let a_weight: Vec<f32> = (0..n_bins)
         .map(|k| {
             let f = k as f32 * sr as f32 / n_fft as f32;
@@ -116,6 +155,7 @@ pub fn compute_features(mono: &[f32], sr: u32, n_fft: usize, hop: usize) -> Feat
         .collect();
 
     let mut chroma = vec![0.0f32; 12 * n_frames];
+    let mut mel = vec![0.0f32; N_MELS * n_frames];
     let mut power_db = vec![0.0f32; n_bins * n_frames];
 
     let mut buf = vec![Complex::<f32>::new(0.0, 0.0); n_fft];
@@ -148,10 +188,20 @@ pub fn compute_features(mono: &[f32], sr: u32, n_fft: usize, hop: usize) -> Feat
         for (c, &v) in frame.iter().enumerate() {
             chroma[c * n_frames + f] = v * inv;
         }
+        // Log-mel timbre.
+        for m in 0..N_MELS {
+            let base = m * n_bins;
+            let mut acc = 0.0f32;
+            for k in 0..n_bins {
+                acc += mel_filter[base + k] * buf[k].norm_sqr();
+            }
+            mel[m * n_frames + f] = acc.max(1e-10).ln();
+        }
     }
 
     Features {
         chroma,
+        mel,
         power_db,
         n_bins,
         n_frames,

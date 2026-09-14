@@ -76,7 +76,8 @@ pub fn assemble(
 ) -> Assembly {
     let loop_end = loop_end.min(audio.frames());
     let trim_end = trim_end.min(audio.frames());
-    let loop_len = loop_end.saturating_sub(loop_start);
+    let intro_len = loop_start.min(audio.frames());
+    let loop_len = loop_end.saturating_sub(intro_len);
     let outro_len = if include_outro {
         trim_end.saturating_sub(loop_end)
     } else {
@@ -84,32 +85,52 @@ pub fn assemble(
     };
 
     // Build the segment plan: (kind, src_start, src_end).
-    // Layout: intro + N full loops + optional partial-loop filler + outro.
+    // Only seamless structures are used: lead-in -> [loop]* -> (outro | fade).
+    // The outro may only follow the end of a full loop, never a fragment.
     let mut plan: Vec<(&'static str, usize, usize)> = Vec::new();
-    if loop_start > 0 {
-        plan.push(("intro", 0, loop_start));
-    }
 
-    let min_filler = (0.25 * audio.sample_rate as f32) as usize;
-    let end_outro = if include_outro { outro_len } else { 0 };
-
-    if loop_len > 0 && target_samples > loop_start + end_outro {
-        let space = target_samples - loop_start - end_outro;
-        let n = space / loop_len;
-        let filler = space % loop_len;
-        for _ in 0..n {
-            plan.push(("loop", loop_start, loop_end));
-        }
-        if filler >= min_filler {
-            plan.push(("tail", loop_start, (loop_start + filler).min(loop_end)));
-        }
-        if include_outro && outro_len > 0 {
-            plan.push(("outro", loop_end, trim_end));
-        }
-    } else {
+    if loop_len == 0 || target_samples < loop_len {
+        // No usable loop (or target too short for even one loop): cut + fade.
         let end = target_samples.min(trim_end).max(1);
         plan.push(("tail", 0, end));
+    } else {
+        // Lead-in: if the whole intro + one loop fits, start at the beginning.
+        // Otherwise start later so the loop still gets the bulk of the runtime.
+        let lead_in = if intro_len + loop_len <= target_samples {
+            intro_len
+        } else {
+            let cap = target_samples / 5 * 2; // ~40% lead-in
+            intro_len.min(target_samples - loop_len).min(cap)
+        };
+        let intro_start = intro_len - lead_in;
+        if lead_in > 0 {
+            plan.push(("intro", intro_start, intro_len));
+        }
+        let remaining = target_samples - lead_in;
+        if include_outro && outro_len > 0 && remaining >= loop_len + outro_len {
+            // lead-in + k full loops + outro (natural ending).
+            let k = (remaining - outro_len) / loop_len;
+            for _ in 0..k {
+                plan.push(("loop", intro_len, loop_end));
+            }
+            plan.push(("outro", loop_end, trim_end));
+        } else {
+            // lead-in + full loops + a faded partial loop to land on target.
+            let k = remaining / loop_len;
+            let rem = remaining % loop_len;
+            for _ in 0..k {
+                plan.push(("loop", intro_len, loop_end));
+            }
+            if rem > 0 {
+                let end = (intro_len + rem).min(loop_end);
+                if end > intro_len {
+                    plan.push(("tail", intro_len, end));
+                }
+            }
+        }
     }
+
+    let ends_on_outro = plan.last().map(|s| s.0 == "outro").unwrap_or(false);
 
     // Render each channel with the same plan.
     let nch = audio.n_channels();
@@ -140,10 +161,9 @@ pub fn assemble(
         });
     }
 
-    // Fade the very end only when the track ends on a truncated loop.
-    let fade = (0.5 * audio.sample_rate as f32) as usize;
-    let last_kind = segments.last().map(|s| s.kind).unwrap_or("tail");
-    if last_kind == "tail" {
+    // Fade the end unless it lands on the natural outro.
+    let fade = (0.6 * audio.sample_rate as f32) as usize;
+    if !ends_on_outro {
         for ch in channels.iter_mut() {
             apply_fade_out(ch, fade);
         }

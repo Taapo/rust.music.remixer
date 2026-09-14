@@ -58,6 +58,10 @@ remix <INPUT> --length <LEN> [options]
   --fps <N>               video frame rate, default 50
   --size <WxH>            video size, default 1920x1080
   --no-outro              end by fading the last loop instead of the outro
+  --min-loop <SEC>        minimum loop length, default 4
+  --max-loop <SEC>        maximum loop length, default = the target length
+  --loop-start <SEC>      force the loop start (use with --loop-end) for manual control
+  --loop-end <SEC>        force the loop end
   --report <FILE.json>    timeline report path
   -q, --quiet             less output
 ```
@@ -70,7 +74,13 @@ remix song.flac --length 1:30 --out song90.wav --mp3 song90.mp3 --mp3-bitrate 32
 
 # 45-second remix with the review video
 remix song.mp3 --length 45 --mp4 song45.mp4
+
+# Force an exact loop (seconds) if the automatic choice is not what you want
+remix song.mp3 --length 2:00 --loop-start 53.8 --loop-end 106.5 --out song.wav
 ```
+
+Verbose output lists the top candidate loop points (start, end, length, score),
+so you can pick a good one by ear and pass it back via `--loop-start/--loop-end`.
 
 ## How it works
 

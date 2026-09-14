@@ -11,6 +11,18 @@ mod video;
 use anyhow::{Context, Result};
 use clap::Parser;
 
+fn cand_line(p: &loops::LoopPair, trim_start: usize, sr: u32) -> String {
+    format!(
+        "    {:.2}s..{:.2}s (len {:.2}s)  note {:.3}  loud {:.3}  score {:.4}",
+        (p.start_frame * dsp::HOP + trim_start) as f64 / sr as f64,
+        (p.end_frame * dsp::HOP + trim_start) as f64 / sr as f64,
+        ((p.end_frame - p.start_frame) * dsp::HOP) as f64 / sr as f64,
+        p.note_distance,
+        p.loudness_difference,
+        p.score
+    )
+}
+
 fn main() -> Result<()> {
     let cli = cli::Cli::parse();
     let target_secs = cli::parse_duration(&cli.length)?;
@@ -78,34 +90,81 @@ fn main() -> Result<()> {
     }
 
     // --- Loop finding ---
-    let min_loop_frames = ((0.35 * n_frames as f32) as usize).max(1);
-    let pairs = loops::find_best_loop_points(
-        &features.chroma,
-        &features.power_db,
-        features.n_bins,
-        n_frames,
-        &beats,
-        bpm,
-        sr,
-        min_loop_frames,
-        n_frames,
-        false,
-    );
-
-    let (loop_start_frame, loop_end_frame) = if let Some(best) = pairs.first().cloned() {
-        (best.start_frame, best.end_frame)
-    } else {
-        if verbose {
-            eprintln!("warning: no loop point found; looping the whole trimmed track");
-        }
-        (0usize, n_frames.saturating_sub(1).max(1))
-    };
-
-    // Trimmed frames -> original samples, then snap to zero crossings.
-    let loop_start_orig = loop_start_frame * dsp::HOP + trim_start;
-    let loop_end_orig = loop_end_frame * dsp::HOP + trim_start;
-    let loop_start = loops::nearest_zero_crossing(&mono, sr, loop_start_orig.min(audio.frames() - 1));
-    let loop_end = loops::nearest_zero_crossing(&mono, sr, loop_end_orig.min(audio.frames() - 1));
+    let trimmed_secs = trimmed.len() as f64 / sr as f64;
+    let target_samples = (target_secs * sr as f64).round() as usize;
+    let min_loop_seconds = cli.min_loop.unwrap_or(4.0).max(0.5);
+    let max_loop_seconds = cli
+        .max_loop
+        .unwrap_or(target_secs)
+        .min(trimmed_secs)
+        .max(min_loop_seconds);
+    let min_loop_frames = ((min_loop_seconds * sr as f64 / dsp::HOP as f64) as usize).max(1);
+    let max_loop_frames = ((max_loop_seconds * sr as f64 / dsp::HOP as f64) as usize)
+        .min(n_frames)
+        .max(min_loop_frames + 1);
+    if verbose {
+        println!(
+            "loops  : searching {:.1}s..{:.1}s (track {:.1}s, target {:.1}s)",
+            min_loop_seconds, max_loop_seconds, trimmed_secs, target_secs
+        );
+    }
+    let (loop_start, loop_end, chosen_score) =
+        if let (Some(ls), Some(le)) = (cli.loop_start, cli.loop_end) {
+            let a = ((ls.max(0.0) * sr as f64).round() as usize).min(audio.frames() - 1);
+            let b = (le.max(0.0) * sr as f64).round() as usize;
+            let b = b.min(audio.frames());
+            anyhow::ensure!(
+                b > a + sr as usize / 20,
+                "--loop-end must be at least 50 ms after --loop-start"
+            );
+            (
+                loops::nearest_zero_crossing(&mono, sr, a),
+                loops::nearest_zero_crossing(&mono, sr, b),
+                1.0f32,
+            )
+        } else {
+            let pairs = loops::find_best_loop_points(
+                &features.chroma,
+                &features.mel,
+                dsp::N_MELS,
+                &features.power_db,
+                features.n_bins,
+                n_frames,
+                &beats,
+                bpm,
+                sr,
+                min_loop_frames,
+                max_loop_frames,
+                false,
+            );
+            // Best-scoring loop short enough to repeat at least once.
+            let (sf, ef, _fitted, score) = if let Some(best) = pairs
+                .iter()
+                .find(|p| (p.end_frame - p.start_frame) * dsp::HOP <= target_samples)
+            {
+                (best.start_frame, best.end_frame, true, best.score)
+            } else if let Some(best) = pairs.first() {
+                (best.start_frame, best.end_frame, false, best.score)
+            } else {
+                if verbose {
+                    eprintln!("warning: no loop point found; looping the whole trimmed track");
+                }
+                (0usize, n_frames.saturating_sub(1).max(1), false, 0.0)
+            };
+            if verbose {
+                println!("  top candidates:");
+                for p in pairs.iter().take(8) {
+                    println!("{}", cand_line(p, trim_start, sr));
+                }
+            }
+            let so = sf * dsp::HOP + trim_start;
+            let eo = ef * dsp::HOP + trim_start;
+            (
+                loops::nearest_zero_crossing(&mono, sr, so.min(audio.frames() - 1)),
+                loops::nearest_zero_crossing(&mono, sr, eo.min(audio.frames() - 1)),
+                score,
+            )
+        };
 
     if verbose {
         println!(
@@ -113,15 +172,15 @@ fn main() -> Result<()> {
             loop_start as f64 / sr as f64,
             loop_end as f64 / sr as f64,
             (loop_end - loop_start) as f64 / sr as f64,
-            pairs
-                .first()
-                .map(|p| format!("  score {:.4}", p.score))
-                .unwrap_or_default()
+            if cli.loop_start.is_some() {
+                "  (manual)".to_string()
+            } else {
+                format!("  score {chosen_score:.4}")
+            },
         );
     }
 
     // --- Assembly ---
-    let target_samples = (target_secs * sr as f64).round() as usize;
     let xfade = (0.012 * sr as f64) as usize;
     let assembly = assemble::assemble(
         &audio,

@@ -59,6 +59,22 @@ pub struct Cli {
     #[arg(long)]
     pub no_outro: bool,
 
+    /// Minimum loop length in seconds (default 4)
+    #[arg(long)]
+    pub min_loop: Option<f64>,
+
+    /// Maximum loop length in seconds (default: the target length)
+    #[arg(long)]
+    pub max_loop: Option<f64>,
+
+    /// Force loop start (seconds) instead of auto-detecting
+    #[arg(long, requires = "loop_end")]
+    pub loop_start: Option<f64>,
+
+    /// Force loop end (seconds) instead of auto-detecting
+    #[arg(long, requires = "loop_start")]
+    pub loop_end: Option<f64>,
+
     /// Write a JSON timeline report here (default: <out-stem>.json when not quiet)
     #[arg(long)]
     pub report: Option<PathBuf>,
