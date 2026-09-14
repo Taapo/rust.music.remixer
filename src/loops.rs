@@ -110,6 +110,7 @@ fn percentile(sorted: &[f32], p: f32) -> f32 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn subseq_sim(
     chroma: &[f32],
     mel: &[f32],
@@ -161,6 +162,7 @@ fn subseq_sim(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn loop_score(
     chroma: &[f32],
     mel: &[f32],

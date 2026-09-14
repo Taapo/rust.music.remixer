@@ -87,7 +87,9 @@ so you can pick a good one by ear and pass it back via `--loop-start/--loop-end`
 1. Decode (Symphonia) → mono for analysis, full channels for output.
 2. Trim leading/trailing silence.
 3. STFT (rustfft) → chroma + perceptually-weighted power (dB).
-4. Beat tracking (Ellis dynamic programming).
+4. Beat + **downbeat** tracking with the "Beat This!" model (ISMIR 2024, pure-Rust
+   `rten` runtime; Ellis DP fallback). Downbeats are used to prefer loops that
+   start/end on a bar line.
 5. Candidate loop points from note-distance + loudness difference, scored by
    cosine similarity of the surrounding beats; prefer the longest among the
    top-scoring pairs.
@@ -118,6 +120,11 @@ This project is MIT. It leans on the algorithm design of
 [PyMusicLooper](https://github.com/arkrow/PyMusicLooper) (MIT) and the Ellis
 beat-tracking method.
 
+Beat/downbeat detection uses the [Beat This!](https://github.com/CPJKU/beat_this)
+model (MIT) via [beat-this-rs](https://github.com/danigb/beat-this-rs) (MIT). The
+two ONNX models (`mel_spectrogram.onnx`, `beat_this_small.onnx`) are embedded in
+the binary (~10.5 MB), which is why the release binary is ~22 MB.
+
 Dependencies and their licenses — note the two non-permissive ones if you plan
 to redistribute:
 
@@ -126,6 +133,7 @@ to redistribute:
 | symphonia | MPL-2.0 |
 | rustfft | MIT/Apache-2.0 |
 | beat-track-rs | MIT/Apache-2.0 |
+| beat-this (+ rten runtime) | MIT |
 | hound | Apache-2.0 |
 | rusty_aac | Apache-2.0 |
 | openh264 | BSD-2-Clause (Cisco) |

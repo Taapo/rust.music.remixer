@@ -1,5 +1,6 @@
 mod assemble;
 mod audio;
+mod beats;
 mod cli;
 mod dsp;
 mod encode;
@@ -64,14 +65,44 @@ fn main() -> Result<()> {
     let trim_start_frames = trim_start / dsp::HOP;
 
     let full_frames = 1 + mono.len() / dsp::HOP;
-    let (bpm, raw_beats) = dsp::detect_beats(&cli.input, sr, dsp::HOP, full_frames);
-    let mut beats: Vec<usize> = raw_beats
-        .iter()
-        .filter_map(|&b| b.checked_sub(trim_start_frames))
-        .filter(|&b| b < n_frames)
-        .collect();
-    beats.sort_unstable();
-    beats.dedup();
+    let map_times = |times: &[f32]| -> Vec<usize> {
+        let mut v: Vec<usize> = times
+            .iter()
+            .map(|&t| (t * sr as f32 / dsp::HOP as f32).round() as i64)
+            .filter_map(|i| {
+                let j = i - trim_start_frames as i64;
+                (j >= 0 && (j as usize) < n_frames).then_some(j as usize)
+            })
+            .collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+
+    let (bpm, beat_frames, downbeat_frames) = match beats::analyze(&cli.input) {
+        Ok(g) => (
+            g.bpm,
+            map_times(&g.beats_secs),
+            map_times(&g.downbeats_secs),
+        ),
+        Err(e) => {
+            if verbose {
+                eprintln!("note   : Beat This! unavailable ({e}); using fallback tracker");
+            }
+            let (bpm, raw) = dsp::detect_beats(&cli.input, sr, dsp::HOP, full_frames);
+            let frames = map_times(
+                &raw.iter()
+                    .map(|&f| f as f32 * dsp::HOP as f32 / sr as f32)
+                    .collect::<Vec<_>>(),
+            );
+            (bpm, frames, Vec::new())
+        }
+    };
+
+    // Candidates come from beats (more options); downbeats are used to prefer
+    // musically aligned (bar-start) loops.
+    let mut beats = beat_frames.clone();
+    let boundary_kind = "beats";
     let used_grid = if beats.len() < 4 {
         beats = dsp::synth_beats(bpm, sr, dsp::HOP, n_frames);
         true
@@ -80,11 +111,13 @@ fn main() -> Result<()> {
     };
     if verbose {
         println!(
-            "analysis: trimmed {:.2}s..{:.2}s, {} beats @ {:.1} bpm{}",
+            "analysis: trimmed {:.2}s..{:.2}s, {:.1} bpm, {} {}, {} downbeats{}",
             trim_start as f64 / sr as f64,
             trim_end as f64 / sr as f64,
-            beats.len(),
             bpm,
+            beats.len(),
+            boundary_kind,
+            downbeat_frames.len(),
             if used_grid { " (synthetic grid)" } else { "" }
         );
     }
@@ -137,19 +170,37 @@ fn main() -> Result<()> {
                 max_loop_frames,
                 false,
             );
-            // Best-scoring loop short enough to repeat at least once.
-            let (sf, ef, _fitted, score) = if let Some(best) = pairs
-                .iter()
-                .find(|p| (p.end_frame - p.start_frame) * dsp::HOP <= target_samples)
-            {
-                (best.start_frame, best.end_frame, true, best.score)
-            } else if let Some(best) = pairs.first() {
-                (best.start_frame, best.end_frame, false, best.score)
-            } else {
-                if verbose {
-                    eprintln!("warning: no loop point found; looping the whole trimmed track");
+            // Best loop short enough to repeat, with a small bonus for loops
+            // that begin/end on a bar start (downbeat).
+            let db = &downbeat_frames;
+            let near_db = |f: usize| db.iter().any(|&d| d.abs_diff(f) <= 8);
+            let rank = |p: &loops::LoopPair| {
+                let mut s = p.score;
+                if near_db(p.start_frame) {
+                    s += 0.01;
                 }
-                (0usize, n_frames.saturating_sub(1).max(1), false, 0.0)
+                if near_db(p.end_frame) {
+                    s += 0.01;
+                }
+                s
+            };
+            let eligible: Vec<&loops::LoopPair> = pairs
+                .iter()
+                .filter(|p| (p.end_frame - p.start_frame) * dsp::HOP <= target_samples)
+                .collect();
+            let chosen = eligible
+                .iter()
+                .copied()
+                .max_by(|a, b| rank(a).partial_cmp(&rank(b)).unwrap())
+                .or_else(|| pairs.first());
+            let (sf, ef, score) = match chosen {
+                Some(best) => (best.start_frame, best.end_frame, best.score),
+                None => {
+                    if verbose {
+                        eprintln!("warning: no loop point found; looping the whole trimmed track");
+                    }
+                    (0usize, n_frames.saturating_sub(1).max(1), 0.0)
+                }
             };
             if verbose {
                 println!("  top candidates:");
