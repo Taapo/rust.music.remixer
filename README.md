@@ -122,8 +122,8 @@ beat-tracking method.
 
 Beat/downbeat detection uses the [Beat This!](https://github.com/CPJKU/beat_this)
 model (MIT) via [beat-this-rs](https://github.com/danigb/beat-this-rs) (MIT). The
-two ONNX models (`mel_spectrogram.onnx`, `beat_this_small.onnx`) are embedded in
-the binary (~10.5 MB), which is why the release binary is ~22 MB.
+mel model and the full FP32 beat model (`beat_this.onnx`, ~83 MB) are embedded in
+the binary, which is why the release binary is ~90 MB.
 
 Dependencies and their licenses — note the two non-permissive ones if you plan
 to redistribute:

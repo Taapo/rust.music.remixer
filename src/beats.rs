@@ -8,7 +8,7 @@ use beat_this::{calculate_bpm, BeatThis, RtenRuntime};
 use std::path::{Path, PathBuf};
 
 static MEL_MODEL: &[u8] = include_bytes!("../models/mel_spectrogram.onnx");
-static BEAT_MODEL: &[u8] = include_bytes!("../models/beat_this_small.onnx");
+static BEAT_MODEL: &[u8] = include_bytes!("../models/beat_this.onnx");
 
 pub struct BeatGrid {
     pub beats_secs: Vec<f32>,
@@ -32,7 +32,7 @@ fn materialize(name: &str, bytes: &[u8]) -> Result<PathBuf> {
 
 pub fn analyze(path: &Path) -> Result<BeatGrid> {
     let mel = materialize("remix_mel_spectrogram.onnx", MEL_MODEL)?;
-    let beat = materialize("remix_beat_this_small.onnx", BEAT_MODEL)?;
+    let beat = materialize("remix_beat_this.onnx", BEAT_MODEL)?;
 
     let runtime = RtenRuntime;
     let mut tracker =

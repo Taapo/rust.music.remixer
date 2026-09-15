@@ -205,11 +205,12 @@ fn find_candidate_pairs(
     beats: &[usize],
     min_loop_duration: usize,
     max_loop_duration: usize,
+    relax: f32,
 ) -> Vec<LoopPair> {
     // deviation[i] = || chroma[:, beats[i]] * ACCEPTABLE_NOTE_DEVIATION ||
     let deviation: Vec<f32> = beats
         .iter()
-        .map(|&b| ACCEPTABLE_NOTE_DEVIATION * col_l2(chroma, n_frames, b))
+        .map(|&b| ACCEPTABLE_NOTE_DEVIATION * relax * col_l2(chroma, n_frames, b))
         .collect();
 
     let mut pairs = Vec::new();
@@ -246,7 +247,7 @@ fn find_candidate_pairs(
                 let loudness_difference = (col_max(power_db, n_frames, n_bins, loop_end)
                     - col_max(power_db, n_frames, n_bins, loop_start))
                 .abs();
-                if loudness_difference <= ACCEPTABLE_LOUDNESS_DIFFERENCE {
+                if loudness_difference <= ACCEPTABLE_LOUDNESS_DIFFERENCE * relax {
                     pairs.push(LoopPair {
                         start_frame: loop_start,
                         end_frame: loop_end,
@@ -351,7 +352,27 @@ pub fn find_best_loop_points(
         beats,
         min_loop_frames,
         max_loop_frames,
+        1.0,
     );
+    // Through-composed / ambient material can have no pair that meets the strict
+    // thresholds; progressively relax them rather than giving up (a plain cut).
+    if pairs.is_empty() {
+        for relax in [2.0f32, 4.0, 8.0, 16.0] {
+            pairs = find_candidate_pairs(
+                chroma,
+                n_frames,
+                power_db,
+                n_bins,
+                beats,
+                min_loop_frames,
+                max_loop_frames,
+                relax,
+            );
+            if !pairs.is_empty() {
+                break;
+            }
+        }
+    }
     if pairs.is_empty() {
         return pairs;
     }
