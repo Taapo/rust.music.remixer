@@ -6,6 +6,7 @@ mod dsp;
 mod encode;
 mod loops;
 mod render;
+mod remix;
 mod report;
 mod video;
 
@@ -233,15 +234,64 @@ fn main() -> Result<()> {
 
     // --- Assembly ---
     let xfade = (0.012 * sr as f64) as usize;
-    let assembly = assemble::assemble(
-        &audio,
-        loop_start,
-        loop_end,
-        trim_end,
-        target_samples,
-        !cli.no_outro,
-        xfade,
-    );
+    let manual = cli.loop_start.is_some();
+    let assembly = if manual {
+        assemble::assemble(
+            &audio,
+            loop_start,
+            loop_end,
+            trim_end,
+            target_samples,
+            !cli.no_outro,
+            xfade,
+        )
+    } else {
+        // Similarity-graph rearrangement (Infinite Jukebox / Adobe Remix style).
+        let boundaries: &[usize] = if downbeat_frames.len() >= 8 {
+            &downbeat_frames
+        } else {
+            &beats
+        };
+        match remix::plan(
+            &features.chroma,
+            &features.mel,
+            n_frames,
+            dsp::N_MELS,
+            boundaries,
+            sr,
+            dsp::HOP,
+            trim_start,
+            trim_end,
+            target_samples,
+        ) {
+            Some(plan) => {
+                if verbose {
+                    let jumps = plan.iter().filter(|s| s.kind == "play").count();
+                    println!(
+                        "remix  : {} sections, {} jumps",
+                        plan.len(),
+                        jumps
+                    );
+                }
+                let fade = plan.last().map(|s| s.kind != "outro").unwrap_or(true);
+                assemble::render(&audio, &plan, target_samples, xfade, fade)
+            }
+            None => {
+                if verbose {
+                    println!("remix  : not enough structure; using single-loop mode");
+                }
+                assemble::assemble(
+                    &audio,
+                    loop_start,
+                    loop_end,
+                    trim_end,
+                    target_samples,
+                    !cli.no_outro,
+                    xfade,
+                )
+            }
+        }
+    };
     if verbose {
         println!(
             "output : {:.2}s (target {:.2}s), {} segments",

@@ -25,13 +25,15 @@ fn kind_color(kind: &str, loop_idx: usize) -> [u8; 4] {
         "intro" => [150, 150, 160, 255],
         "outro" => [255, 190, 90, 255],
         "tail" => [200, 150, 255, 255],
-        "loop" => {
+        "jump" => [90, 225, 200, 255],
+        "play" => {
             if loop_idx.is_multiple_of(2) {
                 [90, 170, 255, 255]
             } else {
-                [90, 225, 200, 255]
+                [130, 140, 255, 255]
             }
         }
+        "loop" => [90, 170, 255, 255],
         _ => [200, 200, 200, 255],
     }
 }
@@ -201,8 +203,8 @@ pub fn background(assembly: &Assembly, report: &Report, w: usize, h: usize) -> C
     let mut x = 8i64;
     let items: [(&str, [u8; 4]); 4] = [
         ("intro", kind_color("intro", 0)),
-        ("loop", kind_color("loop", 0)),
-        ("tail", kind_color("tail", 0)),
+        ("play", kind_color("play", 0)),
+        ("jump", kind_color("jump", 0)),
         ("outro", kind_color("outro", 0)),
     ];
     for (label, color) in items {
