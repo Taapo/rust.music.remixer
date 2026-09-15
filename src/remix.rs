@@ -93,7 +93,7 @@ fn bar_sim(bars: &Bars, i: usize, j: usize) -> f32 {
 
 fn build_neighbors(bars: &Bars, m: usize, floor: f32, top_k: usize) -> Vec<Vec<(usize, f32)>> {
     let mut neighbors: Vec<Vec<(usize, f32)>> = vec![Vec::new(); m];
-    for k in 0..m {
+    for (k, slot) in neighbors.iter_mut().enumerate() {
         let mut cand: Vec<(usize, f32)> = Vec::new();
         for j in 0..m {
             if j.abs_diff(k) < 2 {
@@ -106,13 +106,14 @@ fn build_neighbors(bars: &Bars, m: usize, floor: f32, top_k: usize) -> Vec<Vec<(
         }
         cand.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
         cand.truncate(top_k);
-        neighbors[k] = cand;
+        *slot = cand;
     }
     neighbors
 }
 
 /// DP over output bars: `cost[t*m + i]` is the cheapest way to be at source bar
 /// `i` after `t` output bars.
+#[allow(clippy::too_many_arguments)]
 fn solve(
     neighbors: &[Vec<(usize, f32)>],
     m: usize,

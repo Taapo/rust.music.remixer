@@ -197,6 +197,7 @@ fn loop_score(
     lookahead.max(lookbehind)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn find_candidate_pairs(
     chroma: &[f32],
     n_frames: usize,
